@@ -257,6 +257,16 @@ def get_voting_stats():
         "turnout_percentage": (voted / total_eligible * 100) if total_eligible > 0 else 0,
         "category_counts": category_counts
     }
+    
+def reset_database():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM votes")
+    cur.execute("DELETE FROM students")
+    cur.execute("DELETE FROM candidates")
+    cur.execute("UPDATE control SET published = 0 WHERE id = 1")
+    conn.commit()
+    conn.close()
 
 
 def get_vote_counts():  # Renamed from vote_counts to avoid conflict
@@ -584,432 +594,138 @@ def render_voting_page():
 
 # ================= ADMIN PANEL =================
 def render_admin_panel():
+    # ---------------- ADMIN LOGIN ----------------
     if not st.session_state.admin_authenticated:
         st.subheader("🔐 Admin Login")
-        ap = st.text_input("Admin Password", type="password", key="admin_pw")
+        ap = st.text_input("Admin Password", type="password")
 
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.button("Login", type="primary", use_container_width=True):
-                if ap == ADMIN_PASSWORD:
-                    st.session_state.admin_authenticated = True
-                    st.rerun()
-                else:
-                    st.error("Invalid admin password")
-        st.stop()
+        if st.button("Login"):
+            if ap == ADMIN_PASSWORD:
+                st.session_state.admin_authenticated = True
+                st.rerun()
+            else:
+                st.error("Invalid admin password")
+        return
 
-    # Admin is authenticated
+    # ---------------- ADMIN MENU ----------------
     st.sidebar.markdown("### 🔧 Admin Controls")
-
     admin_menu = st.sidebar.selectbox(
-        "Navigation",
-        ["Dashboard", "Manage Candidates", "View Votes", "Publish Results", "Admin Logs", "Reset Election"]
+        "Admin Menu",
+        [
+            "Dashboard",
+            "Add Candidates",
+            "View Candidates",
+            "Vote Counts",
+            "Publish Results",
+            "Reset Election",
+        ],
     )
 
     st.subheader("👨‍💼 Admin Panel")
 
+    # ---------------- DASHBOARD ----------------
     if admin_menu == "Dashboard":
-        st.markdown("### 📊 Election Dashboard")
-
         stats = get_voting_stats()
 
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Eligible", stats["total_eligible"])
-        with col2:
-            st.metric("Votes Cast", stats["voted"])
-        with col3:
-            st.metric("Pending", stats["pending"])
-        with col4:
-            st.metric("Turnout", f"{stats['turnout_percentage']:.1f}%")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Eligible", stats["total_eligible"])
+        c2.metric("Voted", stats["voted"])
+        c3.metric("Pending", stats["pending"])
+        c4.metric("Turnout", f"{stats['turnout_percentage']:.1f}%")
 
-        # Voting progress
-        progress_value = stats['voted'] / stats['total_eligible'] if stats['total_eligible'] > 0 else 0
-        st.progress(progress_value)
-        st.caption(f"Voting Progress: {stats['voted']}/{stats['total_eligible']} students")
+        progress = (
+            stats["voted"] / stats["total_eligible"]
+            if stats["total_eligible"] > 0
+            else 0
+        )
+        st.progress(progress)
 
-        # Votes by category
-        st.markdown("### Votes by Category")
-        for cat in CATEGORIES:
-            count = stats['category_counts'].get(cat, 0)
-            st.write(f"**{cat}:** {count} votes")
+    # ---------------- ADD CANDIDATES ----------------
+    elif admin_menu == "Add Candidates":
+        st.subheader("➕ Add Candidate")
 
-    elif admin_menu == "Manage Candidates":
-        st.markdown("### 👥 Manage Candidates")
+        cat = st.selectbox("Category", CATEGORIES)
+        name = st.text_input("Candidate Name")
 
-        tab1, tab2, tab3 = st.tabs(["Add Candidate", "View Candidates", "Delete Candidate"])
-
-        with tab1:
-            st.markdown("#### Add New Candidate")
-            col1, col2 = st.columns(2)
-
-            with col1:
-                cat = st.selectbox("Category", CATEGORIES, key="add_cat")
-            with col2:
-                name = st.text_input("Candidate Full Name", key="candidate_name")
-
-            if st.button("Add Candidate", type="primary", key="add_candidate_btn"):
-                if not name.strip():
-                    st.warning("Please enter candidate name")
-                else:
-                    if add_candidate(name.strip(), cat):
-                        st.success(f"✅ Candidate '{name}' added to {cat}")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Candidate '{name}' already exists in {cat}")
-
-        with tab2:
-            st.markdown("#### Current Candidates")
-            try:
-                candidates = get_all_candidates()
-
-                if not candidates:
-                    st.info("No candidates added yet")
-                else:
-                    vote_counts_data = get_candidate_vote_counts()
-                    for cat in CATEGORIES:
-                        cat_candidates = [c for c in candidates if c[1] == cat]
-                        if cat_candidates:
-                            st.markdown(f"**{cat}**")
-                            for cand in cat_candidates:
-                                cand_id, cand_cat, cand_name, added_time = cand
-                                vote_key = f"{cand_cat}|{cand_name}"
-                                vote_count = vote_counts_data.get(vote_key, 0)
-
-                                if added_time:
-                                    try:
-                                        dt = datetime.fromisoformat(added_time)
-                                        formatted_time = dt.strftime("%Y-%m-%d %H:%M")
-                                    except:
-                                        formatted_time = added_time[:16]
-                                else:
-                                    formatted_time = "Unknown"
-
-                                st.markdown(f"- **{cand_name}** (Votes: {vote_count}, Added: {formatted_time})")
-                            st.markdown("---")
-            except Exception as e:
-                st.error(f"Error loading candidates: {str(e)}")
-
-        with tab3:
-            st.markdown("#### Delete Candidate")
-            st.warning("⚠️ You can only delete candidates who have received 0 votes.")
-
-            # Get all candidates for deletion
-            candidates = get_all_candidates()
-            vote_counts_data = get_candidate_vote_counts()
-
-            if not candidates:
-                st.info("No candidates to delete")
+        if st.button("Add"):
+            if not name.strip():
+                st.warning("Name cannot be empty")
+            elif add_candidate(name.strip(), cat):
+                st.success("Candidate added successfully")
+                st.rerun()
             else:
-                # Create a list of candidates with their categories
-                candidate_options = []
-                for cand in candidates:
-                    cand_id, cand_cat, cand_name, _ = cand
-                    vote_key = f"{cand_cat}|{cand_name}"
-                    vote_count = vote_counts_data.get(vote_key, 0)
-                    display_text = f"{cand_name} ({cand_cat}) - {vote_count} vote(s)"
-                    candidate_options.append((display_text, cand_name, cand_cat, vote_count))
+                st.error("Candidate already exists in this category")
 
-                if candidate_options:
-                    # Create dropdown with candidate info
-                    selected_option = st.selectbox(
-                        "Select candidate to delete:",
-                        options=[opt[0] for opt in candidate_options],
-                        key="delete_candidate_select"
-                    )
+    # ---------------- VIEW CANDIDATES ----------------
+    elif admin_menu == "View Candidates":
+        st.subheader("📋 Candidates List")
+        candidates = get_all_candidates()
 
-                    # Find the selected candidate
-                    selected_candidate = None
-                    for opt in candidate_options:
-                        if opt[0] == selected_option:
-                            selected_candidate = opt
-                            break
-
-                    if selected_candidate:
-                        display_text, cand_name, cand_cat, vote_count = selected_candidate
-
-                        st.markdown(f"**Selected:** {cand_name} from {cand_cat}")
-                        st.markdown(f"**Current Votes:** {vote_count}")
-
-                        if vote_count > 0:
-                            st.error(f"❌ Cannot delete {cand_name} as they have {vote_count} vote(s).")
-                        else:
-                            if st.button("🗑️ Delete Candidate", type="secondary", key="delete_btn"):
-                                success, message = delete_candidate(cand_name, cand_cat)
-                                if success:
-                                    st.success(message)
-                                    time.sleep(1)
-                                    st.rerun()
-                                else:
-                                    st.error(message)
-                else:
-                    st.info("No candidates available for deletion")
-
-    elif admin_menu == "View Votes":
-        st.markdown("### 📈 Vote Counts")
-
-        publish_status = get_publish_status()
-        if publish_status["published"]:
-            st.success(f"✅ Results published by {publish_status['publish_admin']} at {publish_status['published_at']}")
+        if not candidates:
+            st.info("No candidates added yet")
         else:
-            st.info("Results are not published yet - only admin can see vote counts")
+            vote_map = get_candidate_vote_counts()
+            for cat in CATEGORIES:
+                st.markdown(f"### {cat}")
+                for _, ccat, cname, _ in candidates:
+                    if ccat == cat:
+                        count = vote_map.get(f"{ccat}|{cname}", 0)
+                        st.write(f"- {cname} (Votes: {count})")
 
-        counts = get_vote_counts()  # Changed function call
+    # ---------------- VOTE COUNTS (NO NAMES) ----------------
+    elif admin_menu == "Vote Counts":
+        st.subheader("📊 Vote Counts (Anonymous)")
 
+        counts = get_vote_counts()
         if not counts:
             st.info("No votes cast yet")
         else:
-            # Display counts without candidate names (as requested)
             for cat in CATEGORIES:
-                cat_counts = [c for c in counts if c[0] == cat]
-                if cat_counts:
-                    st.markdown(f"**{cat}**")
-                    total_cat_votes = sum(c[2] for c in cat_counts)
-                    st.write(f"Total votes in this category: **{total_cat_votes}**")
+                st.markdown(f"### {cat}")
+                cat_votes = [c for c in counts if c[0] == cat]
+                total = sum(c[2] for c in cat_votes)
 
-                    # Show counts without names
-                    for i, (_, candidate, count) in enumerate(cat_counts, 1):
-                        percentage = (count / total_cat_votes * 100) if total_cat_votes > 0 else 0
-                        st.write(f"Candidate #{i}: {count} votes ({percentage:.1f}%)")
-                        st.progress(percentage / 100)
+                st.write(f"Total votes: {total}")
+                for i, (_, _, v) in enumerate(cat_votes, 1):
+                    percent = (v / total * 100) if total else 0
+                    st.write(f"Candidate {i}: {v} votes ({percent:.1f}%)")
+                    st.progress(percent / 100)
 
-                    st.markdown("---")
-
+    # ---------------- PUBLISH RESULTS ----------------
     elif admin_menu == "Publish Results":
-        st.markdown("### 🏆 Publish Election Results")
-
-        publish_status = get_publish_status()
-
-        if publish_status["published"]:
-            st.success(f"✅ Results have already been published!")
-            st.info(f"**Published by:** {publish_status['publish_admin']}")
-            st.info(f"**Published at:** {publish_status['published_at']}")
-
-            # Show winners with celebration
-            st.balloons()
-
-            winners_data, winner_votes_data = winners()  # Changed variable name
-
-            st.markdown("## 🎉 ELECTION RESULTS 🎉")
-
-            if not winners_data:
-                st.info("No votes cast yet - no winners to display")
-            else:
-                for cat, win_list in winners_data.items():
-                    votes = winner_votes_data.get(cat, 0)  # Changed variable name
-                    if len(win_list) == 1:
-                        st.markdown(f"""
-                        <div class='winner-card'>
-                            <h2>🏆 {cat} Winner 🏆</h2>
-                            <h1>{win_list[0]}</h1>
-                            <p>with {votes} votes</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        # Handle tie
-                        winners_str = ", ".join(win_list)
-                        st.markdown(f"""
-                        <div class='winner-card'>
-                            <h2>🏆 {cat} Winners (Tie) 🏆</h2>
-                            <h3>{winners_str}</h3>
-                            <p>each with {votes} votes</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-            # Add sound notification (browser-based)
-            st.markdown("""
-            <audio autoplay>
-                <source src="https://assets.mixkit.co/sfx/preview/mixkit-winning-chimes-2015.mp3" type="audio/mpeg">
-            </audio>
-            """, unsafe_allow_html=True)
-
-        else:
-            st.warning("⚠️ Results are not published yet")
-
-            # Check if there are votes to publish
-            counts = get_vote_counts()  # Changed function call
-            if not counts:
-                st.error("❌ Cannot publish results - no votes have been cast yet!")
-                st.info("Wait for students to vote before publishing results.")
-            else:
-                # Preview winners without publishing
-                winners_data, winner_votes_data = winners()  # Changed variable name
-
-                if winners_data:
-                    st.markdown("#### Preview of Winners (Will be shown after publishing)")
-                    for cat, win_list in winners_data.items():
-                        votes = winner_votes_data.get(cat, 0)  # Changed variable name
-                        if win_list:
-                            st.info(f"**{cat}:** {', '.join(win_list)} - {votes} votes")
-
-                # Publish button with confirmation
-                st.markdown("---")
-                st.markdown("### Publish Results Now")
-
-                with st.expander("⚠️ Important Information Before Publishing"):
-                    st.markdown("""
-                    **Once you publish results:**
-                    1. Results will be visible to everyone
-                    2. Students will see winners on their screens
-                    3. This action cannot be undone
-                    4. Voting will still be allowed unless you disable it
-
-                    **Ensure:**
-                    - All votes have been counted
-                    - You have verified the results
-                    - You are ready to announce winners
-                    """)
-
-                # Multi-step confirmation
-                if st.button("🚀 PUBLISH RESULTS NOW", type="primary", use_container_width=True, key="publish_main"):
-                    st.session_state.show_publish_confirmation = True
-
-                if st.session_state.get('show_publish_confirmation', False):
-                    st.markdown('<div class="delete-warning">', unsafe_allow_html=True)
-                    st.markdown("### ❗ FINAL CONFIRMATION REQUIRED ❗")
-
-                    confirm1 = st.checkbox("I confirm that all votes have been counted correctly", key="confirm1")
-                    confirm2 = st.checkbox("I understand this action cannot be undone", key="confirm2")
-                    confirm3 = st.checkbox("I am authorized to publish election results", key="confirm3")
-
-                    if confirm1 and confirm2 and confirm3:
-                        if st.button("✅ CONFIRM AND PUBLISH", type="primary", key="confirm_publish"):
-                            try:
-                                if publish_results():
-                                    st.success("✅ Results published successfully!")
-                                    st.balloons()
-                                    time.sleep(2)
-                                    st.rerun()
-                                else:
-                                    st.error("Failed to publish results")
-                            except Exception as e:
-                                st.error(f"Error publishing results: {str(e)}")
-                    else:
-                        st.info("Please check all confirmation boxes to proceed")
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                    if st.button("Cancel", key="cancel_publish"):
-                        st.session_state.show_publish_confirmation = False
-                        st.rerun()
-
-    elif admin_menu == "Admin Logs":
-        st.markdown("### 📋 Admin Activity Log")
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM admin_logs ORDER BY timestamp DESC LIMIT 100")
-        logs = cur.fetchall()
-        conn.close()
-
-        if not logs:
-            st.info("No admin activity logged yet")
-        else:
-            for log in logs:
-                with st.expander(f"{log[4]} - {log[2]}"):
-                    st.write(f"**Admin:** {log[1]}")
-                    st.write(f"**Action:** {log[2]}")
-                    if log[3]:
-                        try:
-                            details = json.loads(log[3])
-                            st.write("**Details:**")
-                            st.json(details)
-                        except:
-                            st.write(f"**Details:** {log[3]}")
-
-    elif admin_menu == "Reset Election":
-        st.markdown("### ⚠️ DANGER ZONE")
-        st.error("This will delete ALL election data! Use with extreme caution.")
-
-        with st.expander("⚠️ Read before proceeding"):
-            st.write("""
-            This action will:
-            1. Delete ALL votes
-            2. Delete ALL candidate information
-            3. Delete ALL student voting records
-            4. Reset published status
-
-            This cannot be undone!
-            """)
-
-        if st.button("🚨 SHOW RESET OPTIONS", type="secondary", key="show_reset"):
-            st.session_state.show_reset = True
-
-        if st.session_state.get('show_reset', False):
-            st.markdown('<div class="delete-warning">', unsafe_allow_html=True)
-            st.warning("Are you absolutely sure you want to reset the election?")
-
-            confirm1 = st.checkbox("I understand all votes will be deleted", key="reset_confirm1")
-            confirm2 = st.checkbox("I understand all candidate data will be deleted", key="reset_confirm2")
-            confirm3 = st.checkbox("I understand student voting records will be deleted", key="reset_confirm3")
-
-            if confirm1 and confirm2 and confirm3:
-                if st.button("CONFIRM COMPLETE ELECTION RESET", type="primary", key="confirm_reset"):
-                    reset_election()
-                    st.success("✅ Election has been reset")
-                    st.session_state.show_reset = False
-                    time.sleep(2)
-                    st.session_state.admin_authenticated = False
-                    st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-            if st.button("Cancel Reset", key="cancel_reset"):
-                st.session_state.show_reset = False
+        if not results_published():
+            if st.button("📢 Publish Results"):
+                publish_results()
+                st.success("Results published successfully")
+                st.balloons()
                 st.rerun()
 
-    # Logout button in sidebar
+        if results_published():
+            st.subheader("🏆 Winners")
+            winners_data = get_winners()
+
+            if not winners_data:
+                st.info("No winners yet")
+            else:
+                for cat, names in winners_data.items():
+                    if len(names) == 1:
+                        st.success(f"{cat} Winner: {names[0]}")
+                    else:
+                        st.warning(f"{cat} Tie: {', '.join(names)}")
+
+    # ---------------- RESET ELECTION ----------------
+    elif admin_menu == "Reset Election":
+        st.error("⚠️ This will delete ALL election data")
+
+        confirm = st.checkbox("I understand this action is irreversible")
+        if confirm and st.button("RESET ELECTION"):
+            reset_election()
+            st.success("Election reset successfully")
+            st.session_state.admin_authenticated = False
+            st.rerun()
+
+    # ---------------- LOGOUT ----------------
+    st.sidebar.markdown("---")
     if st.sidebar.button("🚪 Logout Admin"):
         st.session_state.admin_authenticated = False
         st.rerun()
-
-
-# ================= MAIN APP FLOW =================
-# Sidebar menu - only show if not in voting complete state
-if not st.session_state.get('voting_complete', False):
-    menu = st.sidebar.selectbox(
-        "Navigation",
-        ["Student Voting", "Admin Panel"],
-        key="main_menu"
-    )
-
-    if menu == "Student Voting":
-        render_voting_page()
-    elif menu == "Admin Panel":
-        render_admin_panel()
-else:
-    # Voting complete - show only thank you page
-    render_voting_page()
-
-# ================= FOOTER =================
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: #666; font-size: 0.8em; padding: 20px;'>
-        AIE Class Elections 2024 • Secure Voting System • Each Vote Matters
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-# Database troubleshooting in sidebar (only for admin)
-if st.sidebar.button("🔄 Debug Database", key="debug_db"):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    # Show table info
-    st.sidebar.write("### Database Tables")
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = cur.fetchall()
-    for table in tables:
-        st.sidebar.write(f"- {table[0]}")
-
-    # Show control table status
-    st.sidebar.write("### Control Table Status")
-    try:
-        cur.execute("SELECT * FROM control")
-        control_data = cur.fetchall()
-        st.sidebar.write(control_data)
-    except:
-        st.sidebar.write("Error reading control table")
-
-    conn.close()
