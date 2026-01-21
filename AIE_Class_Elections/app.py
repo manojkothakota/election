@@ -257,16 +257,27 @@ def get_voting_stats():
         "turnout_percentage": (voted / total_eligible * 100) if total_eligible > 0 else 0,
         "category_counts": category_counts
     }
-    
+
+
 def reset_database():
+    """DANGER: Completely resets the election database - only for admin"""
     conn = get_conn()
     cur = conn.cursor()
+    
+    # Clear all election data but keep admin logs for audit trail
     cur.execute("DELETE FROM votes")
     cur.execute("DELETE FROM students")
     cur.execute("DELETE FROM candidates")
-    cur.execute("UPDATE control SET published = 0 WHERE id = 1")
+    cur.execute("UPDATE control SET published = 0, published_at = NULL, publish_admin = NULL WHERE id = 1")
+    
+    # Reset autoincrement counters (optional but good for clean state)
+    cur.execute("DELETE FROM sqlite_sequence WHERE name IN ('votes', 'students', 'candidates')")
+    
     conn.commit()
     conn.close()
+    
+    log_admin_action("RESET_DATABASE", {"timestamp": datetime.now().isoformat()})
+    return True
 
 
 def get_vote_counts():  # Renamed from vote_counts to avoid conflict
@@ -439,6 +450,13 @@ st.markdown("""
         border-left: 5px solid #f44336;
         margin: 10px 0;
     }
+    .reset-section {
+        background-color: #fff3e0;
+        padding: 20px;
+        border-radius: 10px;
+        border: 2px solid #ff9800;
+        margin: 20px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -461,6 +479,8 @@ if 'show_publish_confirmation' not in st.session_state:
     st.session_state.show_publish_confirmation = False
 if 'show_reset' not in st.session_state:
     st.session_state.show_reset = False
+if 'show_reset_database' not in st.session_state:
+    st.session_state.show_reset_database = False
 
 
 # ================= STUDENT VOTING =================
@@ -618,6 +638,7 @@ def render_admin_panel():
             "Vote Counts",
             "Publish Results",
             "Reset Election",
+            "Reset Database",  # NEW OPTION ADDED HERE
         ],
     )
 
@@ -702,30 +723,136 @@ def render_admin_panel():
 
         if results_published():
             st.subheader("🏆 Winners")
-            winners_data = get_winners()
+            winners_data, winner_votes = winners()
 
             if not winners_data:
                 st.info("No winners yet")
             else:
                 for cat, names in winners_data.items():
                     if len(names) == 1:
-                        st.success(f"{cat} Winner: {names[0]}")
+                        st.markdown(f'<div class="winner-card"><h3>{cat}</h3><h2>🏆 {names[0]} 🏆</h2><p>Votes: {winner_votes[cat]}</p></div>', unsafe_allow_html=True)
                     else:
                         st.warning(f"{cat} Tie: {', '.join(names)}")
 
     # ---------------- RESET ELECTION ----------------
     elif admin_menu == "Reset Election":
-        st.error("⚠️ This will delete ALL election data")
+        st.error("⚠️ Reset Election - This will delete ALL election data but keep the database structure")
+        
+        st.markdown('<div class="reset-section">', unsafe_allow_html=True)
+        st.markdown("### What will be deleted:")
+        st.markdown("- ✅ All student votes")
+        st.markdown("- ✅ All candidate records")
+        st.markdown("- ✅ All student voting records")
+        st.markdown("- ✅ Election published status")
+        
+        st.markdown("### What will be kept:")
+        st.markdown("- ✅ Database structure")
+        st.markdown("- ✅ Admin logs (for audit trail)")
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        confirm1 = st.checkbox("I understand this will delete ALL voting data")
+        confirm2 = st.checkbox("I confirm I want to reset the election")
+        
+        if confirm1 and confirm2:
+            if st.button("🗑️ RESET ELECTION", type="primary"):
+                reset_election()
+                st.success("✅ Election has been reset successfully!")
+                st.info("You can now add new candidates and start fresh voting.")
+                st.balloons()
+                time.sleep(2)
+                st.rerun()
 
-        confirm = st.checkbox("I understand this action is irreversible")
-        if confirm and st.button("RESET ELECTION"):
-            reset_election()
-            st.success("Election reset successfully")
-            st.session_state.admin_authenticated = False
-            st.rerun()
+    # ---------------- RESET DATABASE ----------------
+    elif admin_menu == "Reset Database":  # NEW SECTION ADDED
+        st.markdown("""
+        <div style='background-color: #ffebee; padding: 20px; border-radius: 10px; border: 3px solid #f44336; margin: 20px 0;'>
+            <h2 style='color: #d32f2f;'>⚠️ DANGER ZONE - COMPLETE DATABASE RESET</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('<div class="reset-section">', unsafe_allow_html=True)
+        st.markdown("### ⚠️ WARNING: This action is EXTREMELY DESTRUCTIVE!")
+        
+        st.markdown("### What will happen:")
+        st.markdown("1. ❌ **ALL election data will be deleted**")
+        st.markdown("2. ❌ All candidate names will be removed")
+        st.markdown("3. ❌ All student votes will be erased")
+        st.markdown("4. ❌ All student voting records will be cleared")
+        st.markdown("5. ❌ Election results will be unpublished")
+        st.markdown("6. ✅ Database structure will remain intact")
+        st.markdown("7. ✅ Admin logs will be kept for audit trail")
+        
+        st.markdown("### When to use this:")
+        st.markdown("- For a completely fresh start")
+        st.markdown("- If you want to change ALL candidate names")
+        st.markdown("- After election is complete and you want to prepare for next election")
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        # Add extra confirmation steps
+        st.markdown("---")
+        st.markdown("### 🔐 Confirmation Steps")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            confirm_reset = st.checkbox("I understand this will delete ALL data")
+            confirm_irreversible = st.checkbox("I understand this action is irreversible")
+        with col2:
+            confirm_admin = st.checkbox("I am an authorized administrator")
+            confirm_backup = st.checkbox("I have backed up any important data")
+        
+        # Final confirmation with password
+        if confirm_reset and confirm_irreversible and confirm_admin and confirm_backup:
+            st.markdown("### 🚨 Final Confirmation")
+            reset_password = st.text_input("Enter admin password to proceed:", type="password")
+            
+            if st.button("🔥 NUKE DATABASE & START FRESH", type="primary"):
+                if reset_password == ADMIN_PASSWORD:
+                    try:
+                        reset_database()
+                        st.success("✅ Database reset completed successfully!")
+                        st.balloons()
+                        st.info("The database is now completely empty. You can add new candidates and start fresh.")
+                        time.sleep(3)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error resetting database: {str(e)}")
+                else:
+                    st.error("❌ Incorrect password. Database reset aborted.")
+        else:
+            st.warning("Please check all confirmation boxes to proceed.")
 
     # ---------------- LOGOUT ----------------
     st.sidebar.markdown("---")
     if st.sidebar.button("🚪 Logout Admin"):
         st.session_state.admin_authenticated = False
         st.rerun()
+
+
+# ================= MAIN APP =================
+def main():
+    # Sidebar navigation
+    st.sidebar.title("Navigation")
+    app_mode = st.sidebar.radio(
+        "Select Mode",
+        ["Student Voting", "Admin Panel"]
+    )
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ℹ️ About")
+    st.sidebar.info(
+        "AIE Class Elections 2024\n\n"
+        "• Each student votes once\n"
+        "• 4 categories\n"
+        "• Admin manages candidates\n"
+        "• Results published by admin"
+    )
+
+    # Render based on mode
+    if app_mode == "Student Voting":
+        render_voting_page()
+    elif app_mode == "Admin Panel":
+        render_admin_panel()
+
+
+if __name__ == "__main__":
+    main()
