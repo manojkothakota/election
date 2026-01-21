@@ -460,7 +460,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🗳️ AIE Class Elections 2024")
+st.title("🗳️ AIE Class Elections 2026")
 
 # ================= SESSION STATE =================
 if 'voting_complete' not in st.session_state:
@@ -649,7 +649,7 @@ def render_admin_panel():
         stats = get_voting_stats()
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Eligible", stats["total_eligible"])
+        c1.metric("Total Eligible", stats["total_eligible"]+1)
         c2.metric("Voted", stats["voted"])
         c3.metric("Pending", stats["pending"])
         c4.metric("Turnout", f"{stats['turnout_percentage']:.1f}%")
@@ -856,3 +856,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
