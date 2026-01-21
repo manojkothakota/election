@@ -6,8 +6,8 @@ from datetime import datetime
 import time
 
 # ================= CONFIG =================
-STUDENT_PASSWORD = "AIE_ELECTIONS"
-ADMIN_PASSWORD = "admin@aie"
+STUDENT_PASSWORD = "AIE"
+ADMIN_PASSWORD = "9182356716"
 
 CATEGORIES = [
     "Hostler Boy",
@@ -856,4 +856,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
